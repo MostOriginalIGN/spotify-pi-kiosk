@@ -1209,6 +1209,11 @@ input[type="range"]::-webkit-slider-runnable-track {
   padding: 18px 0 28px 72px;
 }
 
+.libraryScroll .rail,
+.libraryScroll .tile {
+  touch-action: none;
+}
+
 .section { margin: 0 0 22px; }
 
 .sectionHeader {
@@ -1233,12 +1238,8 @@ input[type="range"]::-webkit-slider-runnable-track {
   grid-auto-flow: column;
   grid-auto-columns: 128px;
   gap: 14px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  overscroll-behavior-y: none;
-  touch-action: manipulation;
-  -webkit-overflow-scrolling: touch;
+  overflow-x: hidden;
+  overflow-y: visible;
   padding: 8px 24px 6px 0;
 }
 
@@ -1248,7 +1249,7 @@ input[type="range"]::-webkit-slider-runnable-track {
 }
 
 .rail .tile {
-  touch-action: manipulation;
+  touch-action: none;
 }
 
 .trackRow,
@@ -1420,6 +1421,11 @@ input[type="range"]::-webkit-slider-runnable-track {
 
 .detailSection .rail {
   padding-right: 0;
+}
+
+.detail .rail,
+.detail .tile {
+  touch-action: none;
 }
 
 .detailHero {

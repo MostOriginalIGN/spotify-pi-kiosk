@@ -226,7 +226,7 @@ function App() {
     return () => clearTimeout(timeout);
   }, [view, isPlaying, lastInteraction]);
 
-  useDragScroll();
+  useScrollGestures();
 
   const interact = useCallback(() => setLastInteraction(Date.now()), []);
 
@@ -1306,69 +1306,88 @@ async function api(url, options = {}) {
   return json;
 }
 
-const HORIZONTAL_SCROLL_LOCK_PX = 12;
-const HORIZONTAL_SCROLL_DOMINANCE = 1.35;
+const SCROLL_GESTURE_LOCK_PX = 10;
+const SCROLL_AXIS_DOMINANCE = 1.2;
+const VERTICAL_SCROLL_SELECTOR = ".libraryScroll, .detail, .queueDrawerList";
 
-function useDragScroll() {
+function useScrollGestures() {
   useEffect(() => {
-    let pending = null;
+    let gesture = null;
     let suppressClickUntil = 0;
 
-    const releasePending = (event) => {
-      if (!pending || event.pointerId !== pending.pointerId) return;
-      if (pending.captured) {
+    const findVerticalScroller = (target) => target.closest(VERTICAL_SCROLL_SELECTOR);
+    const findHorizontalScroller = (target) => target.closest('[data-scroll="x"]');
+
+    const releaseGesture = (event) => {
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      if (gesture.captured && gesture.activeScroller) {
         try {
-          pending.scroller.releasePointerCapture(event.pointerId);
+          gesture.activeScroller.releasePointerCapture(event.pointerId);
         } catch (_error) {
         }
       }
-      pending = null;
+      gesture = null;
     };
 
     const onPointerDown = (event) => {
       if (event.button > 0) return;
-      const scroller = event.target.closest('[data-scroll="x"]');
-      if (!scroller) return;
-      pending = {
-        scroller,
+      const verticalScroller = findVerticalScroller(event.target);
+      if (!verticalScroller) return;
+      const horizontalScroller = findHorizontalScroller(event.target);
+      gesture = {
         pointerId: event.pointerId,
         x: event.clientX,
         y: event.clientY,
-        left: scroller.scrollLeft,
-        locked: false,
+        verticalScroller,
+        horizontalScroller,
+        verticalTop: verticalScroller.scrollTop,
+        horizontalLeft: horizontalScroller?.scrollLeft ?? 0,
+        mode: null,
+        activeScroller: null,
         captured: false,
         moved: false
       };
     };
 
     const onPointerMove = (event) => {
-      if (!pending || event.pointerId !== pending.pointerId) return;
-      const dx = event.clientX - pending.x;
-      const dy = event.clientY - pending.y;
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
 
-      if (!pending.locked) {
-        if (Math.hypot(dx, dy) < HORIZONTAL_SCROLL_LOCK_PX) return;
-        if (Math.abs(dy) >= Math.abs(dx) * HORIZONTAL_SCROLL_DOMINANCE) {
-          pending = null;
+      if (!gesture.mode) {
+        if (Math.hypot(dx, dy) < SCROLL_GESTURE_LOCK_PX) return;
+        if (Math.abs(dy) >= Math.abs(dx) * SCROLL_AXIS_DOMINANCE) {
+          gesture.mode = "vertical";
+          gesture.activeScroller = gesture.verticalScroller;
+        } else if (gesture.horizontalScroller && Math.abs(dx) >= Math.abs(dy) * SCROLL_AXIS_DOMINANCE) {
+          gesture.mode = "horizontal";
+          gesture.activeScroller = gesture.horizontalScroller;
+        } else {
           return;
         }
-        pending.locked = true;
         try {
-          pending.scroller.setPointerCapture(event.pointerId);
-          pending.captured = true;
+          gesture.activeScroller.setPointerCapture(event.pointerId);
+          gesture.captured = true;
         } catch (_error) {
         }
       }
 
-      pending.moved = true;
-      pending.scroller.scrollLeft = pending.left - dx;
-      event.preventDefault();
+      gesture.moved = true;
+      if (gesture.mode === "vertical") {
+        gesture.verticalScroller.scrollTop = gesture.verticalTop - dy;
+        event.preventDefault();
+        return;
+      }
+      if (gesture.mode === "horizontal") {
+        gesture.horizontalScroller.scrollLeft = gesture.horizontalLeft - dx;
+        event.preventDefault();
+      }
     };
 
     const finish = (event) => {
-      if (!pending || event.pointerId !== pending.pointerId) return;
-      if (pending.moved) suppressClickUntil = Date.now() + 120;
-      releasePending(event);
+      if (!gesture || event.pointerId !== gesture.pointerId) return;
+      if (gesture.moved) suppressClickUntil = Date.now() + 120;
+      releaseGesture(event);
     };
 
     const onClick = (event) => {
@@ -1379,10 +1398,10 @@ function useDragScroll() {
     };
 
     const onWheel = (event) => {
-      const rail = event.target.closest('.rail[data-scroll="x"]');
-      if (!rail) return;
+      const horizontalScroller = findHorizontalScroller(event.target);
+      if (!horizontalScroller) return;
       if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
-        rail.scrollLeft += event.deltaX;
+        horizontalScroller.scrollLeft += event.deltaX;
         event.preventDefault();
       }
     };
