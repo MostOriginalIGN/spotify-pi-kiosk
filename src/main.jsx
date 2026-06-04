@@ -29,8 +29,9 @@ import {
   VirtualKeyboard
 } from "./virtualKeyboard.jsx";
 
-const REFRESH_PLAYING_MS = 2000;
-const REFRESH_IDLE_MS = 8000;
+const REFRESH_PLAYING_MS = 5000;
+const REFRESH_IDLE_MS = 10000;
+const PROGRESS_DRIFT_MS = 2500;
 const BROWSE_TIMEOUT_MS = 30000;
 const NOW_FOCUS_TIMEOUT_MS = 15000;
 const DEVICE_HINT_INITIAL_MS = 10000;
@@ -61,6 +62,7 @@ function App() {
   const playerRefreshId = useRef(0);
   const refreshTimersRef = useRef([]);
   const lastPlaybackAtRef = useRef(0);
+  const wasPlayingRef = useRef(false);
 
   const item = player?.item || null;
   const albumImage = largestImage(item?.album?.images || item?.images || []);
@@ -154,7 +156,7 @@ function App() {
   useEffect(() => {
     if (isDemo) return undefined;
     const source = new EventSource("/api/events");
-    const refreshFromSpotify = (delays = [0, 400, 1000, 2000]) =>
+    const refreshFromSpotify = (delays = [600, 1800]) =>
       schedulePlayerRefresh(delays);
     const refreshFromLocalPlayer = (event) => {
       let payload = null;
@@ -195,12 +197,12 @@ function App() {
       } catch (_error) {
       }
     });
-    source.addEventListener("player-command", () => refreshFromSpotify([0, 350, 900]));
+    source.addEventListener("player-command", () => refreshFromSpotify([400, 1200]));
     source.addEventListener("auth", () => {
       api("/api/config").then(setConfig).catch(() => {});
       refreshFromSpotify();
     });
-    source.onerror = () => refreshFromSpotify([0, 500, 1500]);
+    source.onerror = () => refreshFromSpotify([800, 2000]);
     return () => {
       cancelScheduledRefreshes();
       source.close();
@@ -225,6 +227,13 @@ function App() {
     const timeout = setTimeout(() => setView("now"), BROWSE_TIMEOUT_MS);
     return () => clearTimeout(timeout);
   }, [view, isPlaying, lastInteraction]);
+
+  useEffect(() => {
+    if (wasPlayingRef.current && !isPlaying && view === "now") {
+      setLastInteraction(Date.now());
+    }
+    wasPlayingRef.current = isPlaying;
+  }, [isPlaying, view]);
 
   useScrollGestures();
 
@@ -338,12 +347,12 @@ function App() {
         method,
         body: body ? JSON.stringify(body) : undefined
       });
-      schedulePlayerRefresh([150, 500, 1100]);
+      schedulePlayerRefresh([400, 1200]);
       clearError();
     } catch (apiError) {
       setPlayer(snapshot);
       showError(apiError.message);
-      schedulePlayerRefresh([0, 400]);
+      schedulePlayerRefresh([600]);
     }
   };
 
@@ -367,12 +376,12 @@ function App() {
         method: "PUT",
         body: JSON.stringify({ uri: track.uri })
       });
-      schedulePlayerRefresh([150, 500, 1100]);
+      schedulePlayerRefresh([400, 1200]);
       clearError();
     } catch (apiError) {
       setPlayer(snapshot);
       showError(apiError.message);
-      schedulePlayerRefresh([0, 400]);
+      schedulePlayerRefresh([600]);
     }
   }, [clearError, interact, isDemo, player, schedulePlayerRefresh, showError]);
 
@@ -413,7 +422,11 @@ function App() {
     [home, searchResults]
   );
   const showSideControls = view !== "now" || !hasPlayback;
-  const nowFocusMode = view === "now" && hasPlayback && idleFor > NOW_FOCUS_TIMEOUT_MS;
+  const nowFocusMode =
+    view === "now" &&
+    hasPlayback &&
+    isPlaying &&
+    idleFor > NOW_FOCUS_TIMEOUT_MS;
   const deviceName = config?.deviceName || player?.device?.name || "Spotify";
   const pageTransition = usePageTransition(view);
 
@@ -427,10 +440,13 @@ function App() {
       onPointerDown={interact}
       onPointerMove={interactOnMove}
     >
-      {backdropImage
-        ? <img className="backdrop" src={backdropImage.url} alt="" draggable={false} />
-        : null
-      }
+      {backdropImage ? (
+        <BlendImage
+          className="backdrop"
+          imageKey={`${item?.id || "track"}-${backdropImage.url}`}
+          src={backdropImage.url}
+        />
+      ) : null}
       <div className="shade" />
 
       {showSideControls ? (
@@ -505,6 +521,56 @@ function App() {
         ) : null}
       </div>
     </main>
+  );
+}
+
+const BLEND_MS = 650;
+
+function BlendImage({ src, imageKey, className = "", alt = "" }) {
+  const [layers, setLayers] = useState(() =>
+    src ? [{ key: imageKey ?? src, src }] : []
+  );
+
+  useLayoutEffect(() => {
+    if (!src) {
+      setLayers([]);
+      return;
+    }
+    const key = imageKey ?? src;
+    setLayers((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.key === key) return prev;
+      return [...prev.slice(-1), { key, src }];
+    });
+  }, [imageKey, src]);
+
+  useEffect(() => {
+    if (layers.length < 2) return undefined;
+    const outgoingKey = layers[0].key;
+    const timer = setTimeout(() => {
+      setLayers((prev) => prev.filter((layer) => layer.key !== outgoingKey));
+    }, BLEND_MS);
+    return () => clearTimeout(timer);
+  }, [layers]);
+
+  if (!layers.length) return null;
+
+  return (
+    <div className={`blendStack ${className}`.trim()} aria-hidden={!alt}>
+      {layers.map((layer, index) => {
+        const isTop = index === layers.length - 1;
+        const role = layers.length > 1 ? (isTop ? "in" : "out") : "hold";
+        return (
+          <img
+            key={layer.key}
+            className={`blendLayer blendLayer--${role}`}
+            src={layer.src}
+            alt={isTop ? alt : ""}
+            draggable={false}
+          />
+        );
+      })}
+    </div>
   );
 }
 
@@ -933,11 +999,17 @@ function NowPlaying({
 
       <div className="nowHero">
         <div className="nowHeroInner">
-          {image
-            ? <img className="cover" src={image.url} alt={item?.name || ""} draggable={false} />
-            : <div className="cover emptyCover" />
-          }
-          <div className="nowTrackInfo">
+          {image ? (
+            <BlendImage
+              className="cover"
+              imageKey={item?.id || image.url}
+              src={image.url}
+              alt={item?.name || ""}
+            />
+          ) : (
+            <div className="cover emptyCover" />
+          )}
+          <div className="nowTrackInfo" key={item?.id || item?.name}>
             <h1 title={item?.name}>{item?.name}</h1>
             <p title={artists(item)}>{artists(item)}</p>
             <small title={item?.album?.name || readableType(item)}>
@@ -1445,18 +1517,45 @@ function useScrollGestures() {
 }
 
 function useProgress(player, now) {
-  const base = player?.progress_ms || 0;
-  const changedAtRef = useRef(Date.now());
-  const idRef = useRef(null);
-  useEffect(() => {
-    const id = `${player?.item?.id || ""}:${base}:${player?.is_playing}`;
-    if (id !== idRef.current) {
-      idRef.current = id;
-      changedAtRef.current = Date.now();
+  const baseRef = useRef(0);
+  const anchorRef = useRef(Date.now());
+  const trackIdRef = useRef(null);
+  const playingRef = useRef(false);
+
+  const serverProgress = player?.progress_ms ?? 0;
+  const trackId = player?.item?.id ?? null;
+  const playing = Boolean(player?.is_playing);
+
+  useLayoutEffect(() => {
+    if (trackId !== trackIdRef.current) {
+      trackIdRef.current = trackId;
+      baseRef.current = serverProgress;
+      anchorRef.current = Date.now();
+      playingRef.current = playing;
+      return;
     }
-  }, [player, base]);
-  if (!player?.is_playing) return base;
-  return base + (now - changedAtRef.current);
+
+    if (playing !== playingRef.current) {
+      playingRef.current = playing;
+      baseRef.current = serverProgress;
+      anchorRef.current = Date.now();
+      return;
+    }
+
+    if (!playing) {
+      baseRef.current = serverProgress;
+      return;
+    }
+
+    const estimated = baseRef.current + (Date.now() - anchorRef.current);
+    if (Math.abs(serverProgress - estimated) >= PROGRESS_DRIFT_MS) {
+      baseRef.current = serverProgress;
+      anchorRef.current = Date.now();
+    }
+  }, [trackId, playing, serverProgress]);
+
+  if (!playing) return serverProgress;
+  return baseRef.current + (now - anchorRef.current);
 }
 
 function largestImage(images) {
@@ -1525,12 +1624,12 @@ function shouldOpenNowPlaying(url) {
 function localPlayerRefreshDelays(payload) {
   const name = payload?.PLAYER_EVENT;
   if (name === "changed" || name === "change" || name === "track_changed") {
-    return [0, 300, 700, 1200, 2000, 4000, 6500];
+    return [400, 1200, 2500];
   }
   if (name === "playing" || name === "paused" || name === "stopped" || name === "start" || name === "stop") {
-    return [0, 250, 600, 1200, 2200, 4000];
+    return [500, 1500];
   }
-  return [0, 400, 1000, 2000, 3500];
+  return [700, 1800];
 }
 
 function localPlayerShouldShowNow(payload) {
