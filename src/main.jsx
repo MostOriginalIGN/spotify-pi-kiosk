@@ -28,6 +28,7 @@ import {
   usePrefersVirtualKeyboard,
   VirtualKeyboard
 } from "./virtualKeyboard.jsx";
+import { readDemoMode } from "./demoMode.js";
 
 const REFRESH_PLAYING_MS = 5000;
 const REFRESH_IDLE_MS = 10000;
@@ -42,10 +43,10 @@ const INTERACT_MOVE_THROTTLE_MS = 400;
 
 function App() {
   const demoMode = useMemo(
-    () => new URLSearchParams(window.location.search).get("demo") || "",
+    () => readDemoMode(window.location.search),
     []
   );
-  const isDemo = Boolean(demoMode);
+  const isDemo = demoMode !== null;
   const [config, setConfig] = useState(null);
   const [player, setPlayer] = useState(null);
   const [view, setView] = useState("library");
