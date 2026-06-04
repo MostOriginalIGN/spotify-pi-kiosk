@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ChevronLeft,
@@ -52,9 +52,10 @@ function App() {
   const [home, setHome] = useState(null);
   const [searchResults, setSearchResults] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [detailStack, setDetailStack] = useState([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const { error, showError, clearError } = useErrorToast();
   const [lastInteraction, setLastInteraction] = useState(Date.now());
   const [now, setNow] = useState(Date.now());
   const playerRefreshId = useRef(0);
@@ -92,12 +93,12 @@ function App() {
         }
         return next;
       });
-      setError("");
+      clearError();
     } catch (apiError) {
       if (requestId !== playerRefreshId.current) return;
-      setError(apiError.message);
+      showError(apiError.message);
     }
-  }, [isDemo]);
+  }, [clearError, isDemo, showError]);
 
   const schedulePlayerRefresh = useCallback((delays = [0]) => {
     if (isDemo) return;
@@ -117,13 +118,13 @@ function App() {
     setLoading(true);
     try {
       setHome(await api("/api/browse/home"));
-      setError("");
+      clearError();
     } catch (apiError) {
-      setError(apiError.message);
+      showError(apiError.message);
     } finally {
       setLoading(false);
     }
-  }, [config?.authenticated, home, isDemo]);
+  }, [clearError, config?.authenticated, home, isDemo, showError]);
 
   useEffect(() => {
     if (isDemo) {
@@ -133,9 +134,9 @@ function App() {
       setView(demoMode === "now" ? "now" : "library");
       return;
     }
-    api("/api/config").then(setConfig).catch((apiError) => setError(apiError.message));
+    api("/api/config").then(setConfig).catch((apiError) => showError(apiError.message));
     refreshPlayer();
-  }, [demoMode, isDemo, refreshPlayer]);
+  }, [demoMode, isDemo, refreshPlayer, showError]);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
@@ -242,6 +243,7 @@ function App() {
     setView("library");
     setSearchOpen(false);
     setDetail(null);
+    setDetailStack([]);
     setSearchResults(null);
     setQuery("");
     loadHome();
@@ -249,9 +251,16 @@ function App() {
 
   const backFromDetail = useCallback(() => {
     interact();
+    if (detailStack.length) {
+      const stack = [...detailStack];
+      const previous = stack.pop();
+      setDetailStack(stack);
+      setDetail(previous);
+      return;
+    }
     setView("library");
     setDetail(null);
-  }, [interact]);
+  }, [detailStack, interact]);
 
   const openNowPlaying = () => {
     interact();
@@ -282,28 +291,33 @@ function App() {
       setSearchResults(await api(`/api/search?q=${encodeURIComponent(nextQuery)}`));
       setView("library");
       setSearchOpen(false);
-      setError("");
+      clearError();
     } catch (apiError) {
-      setError(apiError.message);
+      showError(apiError.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const openDetail = async (kind, id) => {
+  const openDetail = useCallback(async (kind, id, options = {}) => {
     interact();
     setLoading(true);
     try {
-      const data = await api(`/api/${kind}/${id}`);
+      const data = isDemo ? demoDetail(kind, id) : await api(`/api/${kind}/${id}`);
+      if (options.push && detail) {
+        setDetailStack((stack) => [...stack, detail]);
+      } else if (!options.push) {
+        setDetailStack([]);
+      }
       setDetail({ kind, data });
       setView("detail");
-      setError("");
+      clearError();
     } catch (apiError) {
-      setError(apiError.message);
+      showError(apiError.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [clearError, detail, interact, isDemo, showError]);
 
   const command = async (url, body, method = "POST") => {
     interact();
@@ -325,10 +339,10 @@ function App() {
         body: body ? JSON.stringify(body) : undefined
       });
       schedulePlayerRefresh([150, 500, 1100]);
-      setError("");
+      clearError();
     } catch (apiError) {
       setPlayer(snapshot);
-      setError(apiError.message);
+      showError(apiError.message);
       schedulePlayerRefresh([0, 400]);
     }
   };
@@ -354,13 +368,13 @@ function App() {
         body: JSON.stringify({ uri: track.uri })
       });
       schedulePlayerRefresh([150, 500, 1100]);
-      setError("");
+      clearError();
     } catch (apiError) {
       setPlayer(snapshot);
-      setError(apiError.message);
+      showError(apiError.message);
       schedulePlayerRefresh([0, 400]);
     }
-  }, [interact, isDemo, player, schedulePlayerRefresh]);
+  }, [clearError, interact, isDemo, player, schedulePlayerRefresh, showError]);
 
   const toggleSaved = async () => {
     const trackId = item?.id;
@@ -387,10 +401,10 @@ function App() {
       await api(`/api/tracks/${trackId}/saved`, {
         method: nextSaved ? "PUT" : "DELETE"
       });
-      setError("");
+      clearError();
     } catch (apiError) {
       setPlayer(snapshot);
-      setError(apiError.message);
+      showError(apiError.message);
     }
   };
 
@@ -401,6 +415,7 @@ function App() {
   const showSideControls = view !== "now" || !hasPlayback;
   const nowFocusMode = view === "now" && hasPlayback && idleFor > NOW_FOCUS_TIMEOUT_MS;
   const deviceName = config?.deviceName || player?.device?.name || "Spotify";
+  const pageTransition = usePageTransition(view);
 
   if (blackedOut) {
     return <button className="blackout" aria-label="Wake display" onClick={interact} />;
@@ -420,6 +435,7 @@ function App() {
 
       {showSideControls ? (
         <SideControls
+          key="side-rail"
           hasPlayback={hasPlayback}
           searchActive={Boolean(searchResults)}
           searchOpen={searchOpen}
@@ -440,43 +456,124 @@ function App() {
 
       {!config?.configured ? <SetupPanel envFile={config?.envFile} /> : null}
       {config?.configured && !config?.authenticated ? <LoginPanel /> : null}
-      {error ? <div className="toast">{error}</div> : null}
+      {error ? <Toast message={error} onDismiss={clearError} /> : null}
       {loading ? <Loader2 className="spinner" size={20} /> : null}
 
-      {view === "now" && hasPlayback ? (
-        <NowPlaying
-          item={item}
-          image={albumImage}
-          player={player}
-          progress={progress}
-          isDemo={isDemo}
-          isPlaying={isPlaying}
-          focused={nowFocusMode}
-          deviceName={deviceName}
-          deviceHintEnabled={config?.deviceHint?.enabled !== false}
-          deviceHintIntervalMs={config?.deviceHint?.intervalMs ?? 300000}
-          onCommand={command}
-          onPlayTrack={playTrack}
-          onToggleSaved={toggleSaved}
-          onLibrary={goHome}
-        />
-      ) : null}
+      <div className="pageStack">
+        {view === "now" && hasPlayback ? (
+          <PageLayer transition={pageTransition}>
+            <NowPlaying
+              item={item}
+              image={albumImage}
+              player={player}
+              progress={progress}
+              isDemo={isDemo}
+              isPlaying={isPlaying}
+              focused={nowFocusMode}
+              deviceName={deviceName}
+              deviceHintEnabled={config?.deviceHint?.enabled !== false}
+              deviceHintIntervalMs={config?.deviceHint?.intervalMs ?? 300000}
+              onCommand={command}
+              onPlayTrack={playTrack}
+              onToggleSaved={toggleSaved}
+              onLibrary={goHome}
+            />
+          </PageLayer>
+        ) : null}
 
-      {view === "library" ? (
-        <LibraryView
-          sections={sections}
-          searchActive={Boolean(searchResults)}
-          authenticated={Boolean(config?.authenticated)}
-          onPlay={command}
-          onDetail={openDetail}
-        />
-      ) : null}
+        {view === "library" ? (
+          <PageLayer transition={pageTransition}>
+            <LibraryView
+              sections={sections}
+              searchActive={Boolean(searchResults)}
+              authenticated={Boolean(config?.authenticated)}
+              onPlay={command}
+              onDetail={openDetail}
+            />
+          </PageLayer>
+        ) : null}
 
-      {view === "detail" ? (
-        <Detail detail={detail} onPlay={command} onBack={backFromDetail} />
-      ) : null}
+        {view === "detail" ? (
+          <PageLayer transition={pageTransition}>
+            <Detail
+              detail={detail}
+              onPlay={command}
+              onBack={backFromDetail}
+              onDetail={(kind, id) => openDetail(kind, id, { push: true })}
+            />
+          </PageLayer>
+        ) : null}
+      </div>
     </main>
   );
+}
+
+function Toast({ message, onDismiss }) {
+  return (
+    <div className="toast" role="alert">
+      <span>{message}</span>
+      <button type="button" className="toastDismiss" onClick={onDismiss} aria-label="Dismiss">
+        <X size={16} />
+      </button>
+    </div>
+  );
+}
+
+function useErrorToast() {
+  const [error, setError] = useState("");
+  const dismissTimer = useRef(null);
+  const lastShownRef = useRef({ message: "", at: 0 });
+
+  const clearError = useCallback(() => {
+    clearTimeout(dismissTimer.current);
+    setError("");
+  }, []);
+
+  const showError = useCallback((message) => {
+    if (!message) return;
+    const now = Date.now();
+    if (
+      message === lastShownRef.current.message &&
+      now - lastShownRef.current.at < 8000
+    ) {
+      return;
+    }
+    lastShownRef.current = { message, at: now };
+    setError(message);
+    clearTimeout(dismissTimer.current);
+    dismissTimer.current = setTimeout(() => setError(""), 8000);
+  }, []);
+
+  useEffect(() => () => clearTimeout(dismissTimer.current), []);
+
+  return { error, showError, clearError };
+}
+
+function PageLayer({ transition, children }) {
+  return <div className={`pageLayer pageLayer--${transition}`}>{children}</div>;
+}
+
+function usePageTransition(view) {
+  const prevViewRef = useRef(view);
+  const [transition, setTransition] = useState("fade");
+
+  useLayoutEffect(() => {
+    const prev = prevViewRef.current;
+    if (prev !== view) {
+      setTransition(pageTransitionName(prev, view));
+      prevViewRef.current = view;
+    }
+  }, [view]);
+
+  return transition;
+}
+
+function pageTransitionName(from, to) {
+  if (to === "detail") return "from-right";
+  if (from === "detail") return "from-left";
+  if (to === "now") return "from-bottom";
+  if (from === "now") return "from-top";
+  return "fade";
 }
 
 function SideControls({ hasPlayback, searchActive, searchOpen, onHome, onSearch, onNow }) {
@@ -611,7 +708,7 @@ function QueueOverlay({ open, items, onClose, onPlayTrack }) {
             <X size={18} />
           </button>
         </div>
-        <div className="queueDrawerList" data-scroll="y">
+        <div className="queueDrawerList">
           {!items.length ? (
             <p className="queueDrawerEmpty">Nothing queued</p>
           ) : null}
@@ -949,7 +1046,7 @@ function DeviceConnectHint({ deviceName, visible }) {
 function LibraryView({ sections, searchActive, authenticated, onPlay, onDetail }) {
   return (
     <section className="libraryView">
-      <div className="libraryScroll" data-scroll="y">
+      <div className="libraryScroll">
         {!authenticated ? <EmptyLibrary /> : null}
         {authenticated && !sections.length ? (
           <EmptyState searchActive={searchActive} />
@@ -1012,8 +1109,28 @@ function MediaSection({ section, onPlay, onDetail }) {
   );
 }
 
-function Detail({ detail, onPlay, onBack }) {
+function Detail({ detail, onPlay, onBack, onDetail }) {
   if (!detail) return null;
+  if (detail.kind === "artists") {
+    return (
+      <ArtistDetail
+        data={detail.data}
+        onPlay={onPlay}
+        onBack={onBack}
+        onDetail={onDetail}
+      />
+    );
+  }
+  return (
+    <CollectionDetail
+      detail={detail}
+      onPlay={onPlay}
+      onBack={onBack}
+    />
+  );
+}
+
+function CollectionDetail({ detail, onPlay, onBack }) {
   const data = detail.data;
   const image = largestImage(data.images || data.album?.images || []);
   const uri = data.uri;
@@ -1060,6 +1177,74 @@ function Detail({ detail, onPlay, onBack }) {
   );
 }
 
+function ArtistDetail({ data, onPlay, onBack, onDetail }) {
+  const image = largestImage(data.images || []);
+  const albums = data.albums || [];
+  const topTracks = data.topTracks || [];
+  const genres = data.genres?.slice(0, 3).join(" · ");
+
+  return (
+    <section className="detail">
+      <div className="detailHero">
+        <button className="backButton" onClick={onBack} title="Back">
+          <ChevronLeft size={20} />
+        </button>
+        {image
+          ? <img src={image.url} alt="" draggable={false} />
+          : <div className="tileArt" />
+        }
+        <div>
+          <p className="eyebrow">Artist</p>
+          <h1>{data.name}</h1>
+          {genres ? <p>{genres}</p> : null}
+          {data.uri ? (
+            <button
+              className="primaryAction"
+              onClick={() => onPlay("/api/player/play", { contextUri: data.uri }, "PUT")}
+            >
+              <Play size={14} /> Play artist
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {albums.length ? (
+        <div className="detailSection">
+          <h2 className="detailSectionHeader">Albums & singles</h2>
+          <div className="rail" data-scroll="x">
+            {albums.map((album) => (
+              <MediaTile
+                key={album.id}
+                item={album}
+                onPlay={onPlay}
+                onDetail={onDetail}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {topTracks.length ? (
+        <div className="detailSection">
+          <h2 className="detailSectionHeader">Popular</h2>
+          <div className="trackList">
+            {topTracks.map((track) => (
+              <button
+                key={track.id || track.uri}
+                className="trackRow"
+                onClick={() => onPlay("/api/player/play", { uri: track.uri }, "PUT")}
+              >
+                <span>{track.name}</span>
+                <small>{track.album?.name || artists(track)}</small>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function MediaTile({ item, compact, onPlay, onDetail }) {
   const media = item.track || item;
   const image = largestImage(media.album?.images || media.images || []);
@@ -1069,11 +1254,13 @@ function MediaTile({ item, compact, onPlay, onDetail }) {
       onPlay("/api/player/play", { uri: media.uri }, "PUT");
       return;
     }
-    if (media.uri) {
-      onPlay("/api/player/play", { contextUri: media.uri }, "PUT");
+    if (media.id && (type === "album" || type === "playlist" || type === "artist")) {
+      onDetail(`${type}s`, media.id);
       return;
     }
-    if (media.id) onDetail(`${type}s`, media.id);
+    if (media.uri) {
+      onPlay("/api/player/play", { contextUri: media.uri }, "PUT");
+    }
   };
   return (
     <button type="button" className={`tile ${compact ? "compactTile" : ""}`} onClick={open}>
@@ -1119,44 +1306,69 @@ async function api(url, options = {}) {
   return json;
 }
 
+const HORIZONTAL_SCROLL_LOCK_PX = 12;
+const HORIZONTAL_SCROLL_DOMINANCE = 1.35;
+
 function useDragScroll() {
   useEffect(() => {
-    if (window.matchMedia("(pointer: coarse)").matches) return undefined;
-
-    let drag = null;
+    let pending = null;
     let suppressClickUntil = 0;
 
+    const releasePending = (event) => {
+      if (!pending || event.pointerId !== pending.pointerId) return;
+      if (pending.captured) {
+        try {
+          pending.scroller.releasePointerCapture(event.pointerId);
+        } catch (_error) {
+        }
+      }
+      pending = null;
+    };
+
     const onPointerDown = (event) => {
-      if (event.pointerType !== "mouse" || event.button > 0) return;
-      const scroller = event.target.closest("[data-scroll]");
+      if (event.button > 0) return;
+      const scroller = event.target.closest('[data-scroll="x"]');
       if (!scroller) return;
-      drag = {
+      pending = {
         scroller,
-        axis: scroller.dataset.scroll,
         pointerId: event.pointerId,
         x: event.clientX,
         y: event.clientY,
         left: scroller.scrollLeft,
-        top: scroller.scrollTop,
+        locked: false,
+        captured: false,
         moved: false
       };
     };
 
     const onPointerMove = (event) => {
-      if (!drag || event.pointerId !== drag.pointerId) return;
-      const dx = event.clientX - drag.x;
-      const dy = event.clientY - drag.y;
-      if (Math.abs(dx) + Math.abs(dy) < 6) return;
-      drag.moved = true;
-      if (drag.axis !== "y") drag.scroller.scrollLeft = drag.left - dx;
-      if (drag.axis !== "x") drag.scroller.scrollTop = drag.top - dy;
+      if (!pending || event.pointerId !== pending.pointerId) return;
+      const dx = event.clientX - pending.x;
+      const dy = event.clientY - pending.y;
+
+      if (!pending.locked) {
+        if (Math.hypot(dx, dy) < HORIZONTAL_SCROLL_LOCK_PX) return;
+        if (Math.abs(dy) >= Math.abs(dx) * HORIZONTAL_SCROLL_DOMINANCE) {
+          pending = null;
+          return;
+        }
+        pending.locked = true;
+        try {
+          pending.scroller.setPointerCapture(event.pointerId);
+          pending.captured = true;
+        } catch (_error) {
+        }
+      }
+
+      pending.moved = true;
+      pending.scroller.scrollLeft = pending.left - dx;
       event.preventDefault();
     };
 
     const finish = (event) => {
-      if (!drag || event.pointerId !== drag.pointerId) return;
-      if (drag.moved) suppressClickUntil = Date.now() + 120;
-      drag = null;
+      if (!pending || event.pointerId !== pending.pointerId) return;
+      if (pending.moved) suppressClickUntil = Date.now() + 120;
+      releasePending(event);
     };
 
     const onClick = (event) => {
@@ -1166,17 +1378,28 @@ function useDragScroll() {
       event.stopPropagation();
     };
 
+    const onWheel = (event) => {
+      const rail = event.target.closest('.rail[data-scroll="x"]');
+      if (!rail) return;
+      if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+        rail.scrollLeft += event.deltaX;
+        event.preventDefault();
+      }
+    };
+
     document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointermove", onPointerMove, { passive: false });
     document.addEventListener("pointercancel", finish);
     document.addEventListener("pointerup", finish);
     document.addEventListener("click", onClick, true);
+    document.addEventListener("wheel", onWheel, { passive: false, capture: true });
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("pointermove", onPointerMove);
       document.removeEventListener("pointercancel", finish);
       document.removeEventListener("pointerup", finish);
       document.removeEventListener("click", onClick, true);
+      document.removeEventListener("wheel", onWheel, true);
     };
   }, []);
 }
@@ -1399,6 +1622,66 @@ function demoCommand(current, url, body) {
 function findDemoTrackByUri(uri) {
   const tracks = [demoPlayer().item, ...demoQueue(null)];
   return tracks.find((track) => track.uri === uri) || demoPlayer().item;
+}
+
+function demoDetail(kind, id) {
+  if (kind === "artists") return demoArtistDetail(id);
+  if (kind === "albums") return demoAlbumDetail(id);
+  if (kind === "playlists") {
+    const playlist =
+      demoHome().playlists.items.find((item) => item.id === id) ||
+      demoHome().playlists.items[0];
+    return {
+      ...playlist,
+      tracks: { items: demoQueue(null).map((track) => ({ track })) }
+    };
+  }
+  return demoArtistDetail(id);
+}
+
+function demoAlbumItem(id, name, artist, year, colors) {
+  return {
+    id,
+    name,
+    type: "album",
+    uri: `spotify:album:${id}`,
+    release_date: year,
+    artists: [{ name: artist }],
+    images: [demoImage(name, colors)]
+  };
+}
+
+function demoArtistDetail(id) {
+  const artist =
+    demoHome().topArtists.items.find((item) => item.id === id) ||
+    demoArtist("artist-2", "Frank Sinatra", ["#091821", "#b08148", "#221927"]);
+  const artistName = artist.name;
+  const albums = [
+    demoAlbumItem("album-cycles", "Cycles", artistName, "1968", ["#051b24", "#b4834f", "#22192a"]),
+    demoAlbumItem("album-dream", "Dream", artistName, "1999", ["#142830", "#6a9ab0", "#ddd5c8"]),
+    demoAlbumItem("album-pretty", "Pretty World", artistName, "2000", ["#1a3a52", "#8cb4d8", "#f0e6d8"])
+  ];
+  const topTracks = [
+    demoTrack("sinatra-1", "My Way Of Life", artistName, "Cycles", "1968", ["#051b24", "#b4834f", "#22192a"]),
+    demoTrack("sinatra-2", "Fly Me To The Moon", artistName, "It Might as Well Be Swing", "1964", ["#1a2744", "#c9a24d", "#22192a"]),
+    demoTrack("sinatra-3", "The Way You Look Tonight", artistName, "Sinatra Sings...", "1962", ["#241018", "#9d7d5c", "#e8dfd0"])
+  ];
+  return {
+    ...artist,
+    genres: ["jazz", "vocal jazz", "swing"],
+    albums,
+    topTracks
+  };
+}
+
+function demoAlbumDetail(id) {
+  const artistDetail = demoArtistDetail("artist-2");
+  const album = artistDetail.albums.find((item) => item.id === id) || artistDetail.albums[0];
+  const tracks = artistDetail.topTracks.map((track) => ({
+    ...track,
+    album: { name: album.name, images: album.images }
+  }));
+  return { ...album, tracks: { items: tracks } };
 }
 
 function demoQueue(currentId) {

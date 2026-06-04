@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SpotifyClient } from "./spotifyClient.js";
+import { SpotifyClient, SpotifyError, spotifyErrorMessage } from "./spotifyClient.js";
 
 describe("SpotifyClient", () => {
   it("refreshes expired tokens and preserves the refresh token", async () => {
@@ -162,3 +162,59 @@ function response(body, status = 200) {
     text: async () => (body ? JSON.stringify(body) : "")
   };
 }
+
+describe("artistDetail", () => {
+  it("loads albums and top tracks together", async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/artists/a1")) {
+        return response({ id: "a1", name: "Sinatra", uri: "spotify:artist:a1", images: [] });
+      }
+      if (path.includes("/artists/a1/albums")) {
+        return response({
+          items: [
+            { id: "al-1", name: "Cycles", uri: "spotify:album:al-1" },
+            { id: "al-1", name: "Cycles", uri: "spotify:album:al-1" }
+          ]
+        });
+      }
+      if (path.includes("/artists/a1/top-tracks")) {
+        return response({
+          tracks: [{ id: "t-1", name: "My Way", uri: "spotify:track:t-1" }]
+        });
+      }
+      return response(null, 404);
+    });
+    const client = new SpotifyClient({
+      config: { ...config(), market: "US" },
+      tokenStore: memoryStore({
+        refresh_token: "refresh",
+        access_token: "access",
+        expires_at: Date.now() + 100000
+      }),
+      fetchImpl
+    });
+
+    const detail = await client.artistDetail("a1");
+
+    expect(detail.name).toBe("Sinatra");
+    expect(detail.albums).toHaveLength(1);
+    expect(detail.topTracks).toHaveLength(1);
+  });
+});
+
+describe("spotifyErrorMessage", () => {
+  it("returns Spotify API messages for clients", () => {
+    const error = new SpotifyError("Spotify API request failed", { status: 403 }, {
+      error: { status: 403, message: "Player command failed: Restriction violated" }
+    });
+    expect(spotifyErrorMessage(error)).toBe("Player command failed: Restriction violated");
+  });
+
+  it("prefixes rate limit errors", () => {
+    const error = new SpotifyError("Spotify API request failed", { status: 429 }, {
+      error: { status: 429, message: "API rate limit exceeded" }
+    });
+    expect(spotifyErrorMessage(error)).toBe("Spotify rate limit: API rate limit exceeded");
+  });
+});

@@ -17,6 +17,7 @@ export const config = {
     deviceName: cleanDeviceName(
       process.env.SPOTIFY_DEVICE_NAME || os.hostname()
     ),
+    market: process.env.SPOTIFY_MARKET || "US",
     deviceCachePath:
       process.env.SPOTIFY_DEVICE_CACHE_PATH || "./data/device-cache.json",
     connectTokenPath:

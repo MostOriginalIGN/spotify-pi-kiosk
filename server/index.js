@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config, spotifyScopes } from "./config.js";
 import { EventBus } from "./eventBus.js";
-import { SpotifyClient, SpotifyError } from "./spotifyClient.js";
+import { SpotifyClient, SpotifyError, spotifyErrorMessage } from "./spotifyClient.js";
 import { TokenStore } from "./tokenStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -107,7 +107,7 @@ app.get("/api/browse/home", route(async () => spotify.browseHome()));
 app.get("/api/search", route(async (req) => spotify.search(String(req.query.q || ""), String(req.query.type || "track,album,playlist,artist"))));
 app.get("/api/playlists/:id", route(async (req) => spotify.playlist(req.params.id)));
 app.get("/api/albums/:id", route(async (req) => spotify.album(req.params.id)));
-app.get("/api/artists/:id", route(async (req) => spotify.artist(req.params.id)));
+app.get("/api/artists/:id", route(async (req) => spotify.artistDetail(req.params.id)));
 
 async function handleConnectDeviceEvent(req, res, next) {
   if (!isLocalRequest(req)) {
@@ -168,7 +168,7 @@ app.use((error, _req, res, _next) => {
   const status = error instanceof SpotifyError ? error.status || 500 : 500;
   console.error(error);
   res.status(status).json({
-    error: error.message || "Unexpected error",
+    error: spotifyErrorMessage(error),
     details: process.env.NODE_ENV === "development" ? error.body || null : null
   });
 });

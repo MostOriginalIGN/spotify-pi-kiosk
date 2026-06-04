@@ -23,6 +23,18 @@ export class SpotifyError extends Error {
   }
 }
 
+export function spotifyErrorMessage(error) {
+  if (!(error instanceof SpotifyError)) {
+    return error?.message || "Unexpected error";
+  }
+  const spotifyMessage = error.body?.error?.message;
+  if (spotifyMessage) {
+    if (error.status === 429) return `Spotify rate limit: ${spotifyMessage}`;
+    return spotifyMessage;
+  }
+  return error.message || "Spotify API request failed";
+}
+
 export class SpotifyClient {
   constructor({ config, tokenStore, fetchImpl = globalThis.fetch }) {
     this.config = config;
@@ -479,6 +491,32 @@ export class SpotifyClient {
   artist(id) {
     return this.request(`/artists/${encodeURIComponent(id)}`);
   }
+
+  async artistDetail(id) {
+    const market = encodeURIComponent(this.config.market || "US");
+    const artistId = encodeURIComponent(id);
+    const [artist, albums, topTracks] = await Promise.all([
+      this.artist(id),
+      this.request(
+        `/artists/${artistId}/albums?include_groups=album,single&limit=24&market=${market}`
+      ),
+      this.request(`/artists/${artistId}/top-tracks?market=${market}`)
+    ]);
+    return {
+      ...artist,
+      albums: dedupeById(albums?.items || []),
+      topTracks: topTracks?.tracks || []
+    };
+  }
+}
+
+function dedupeById(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    if (!item?.id || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
 }
 
 async function readJson(response) {
