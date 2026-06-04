@@ -607,9 +607,30 @@ function SideControls({ hasPlayback, searchActive, searchOpen, onHome, onSearch,
 function SearchOverlay({ query, setQuery, onSubmit, onClose }) {
   const inputRef = useRef(null);
   const blockOsKeyboard = usePrefersVirtualKeyboard();
+  const scrollSnapshotRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const libraryScroll = document.querySelector(".libraryScroll");
+    scrollSnapshotRef.current = {
+      windowX: window.scrollX,
+      windowY: window.scrollY,
+      libraryScrollTop: libraryScroll?.scrollTop ?? 0
+    };
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+
+    return () => {
+      const snapshot = scrollSnapshotRef.current;
+      if (!snapshot) return;
+      window.scrollTo(snapshot.windowX, snapshot.windowY);
+      if (libraryScroll) libraryScroll.scrollTop = snapshot.libraryScrollTop;
+    };
+  }, []);
 
   useEffect(() => {
-    if (!blockOsKeyboard) inputRef.current?.focus();
+    if (blockOsKeyboard) return;
+    inputRef.current?.focus({ preventScroll: true });
   }, [blockOsKeyboard]);
 
   const handleVirtualKey = useCallback(
