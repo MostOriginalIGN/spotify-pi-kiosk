@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+payload=$(cat <<EOF
+{
+  "PLAYER_EVENT": "$(json_escape "${PLAYER_EVENT:-}")",
+  "TRACK_ID": "$(json_escape "${TRACK_ID:-}")",
+  "OLD_TRACK_ID": "$(json_escape "${OLD_TRACK_ID:-}")",
+  "USER_NAME": "$(json_escape "${USER_NAME:-}")",
+  "CLIENT_ID": "$(json_escape "${CLIENT_ID:-}")",
+  "CLIENT_NAME": "$(json_escape "${CLIENT_NAME:-}")",
+  "POSITION_MS": "$(json_escape "${POSITION_MS:-}")"
+}
+EOF
+)
+
+KIOSK_API_URL="${KIOSK_API_URL:-http://127.0.0.1:4928}"
+
+if ! curl -fsS \
+  --max-time 2 \
+  -H "Content-Type: application/json" \
+  -d "$payload" \
+  "${KIOSK_API_URL}/api/raspotify/event"; then
+  echo "spotify-kiosk-raspotify-event: failed to notify kiosk (${PLAYER_EVENT:-unknown})" >&2
+fi

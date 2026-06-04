@@ -1,0 +1,18 @@
+[Unit]
+Description=Spotify Kiosk Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@APP_DIR@
+Environment=NODE_ENV=production
+EnvironmentFile=@APP_DIR@/.env
+ExecStart=/usr/bin/node @APP_DIR@/server/index.js
+Restart=on-failure
+RestartSec=5s
+User=@USER@
+Group=@USER@
+
+[Install]
+WantedBy=multi-user.target

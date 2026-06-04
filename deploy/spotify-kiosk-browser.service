@@ -1,0 +1,15 @@
+[Unit]
+Description=Spotify Kiosk Browser
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=/run/user/@USER_UID@
+Environment=WAYLAND_DISPLAY=wayland-0
+ExecStart=/usr/bin/chromium --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --disable-pinch --overscroll-history-navigation=0 --user-data-dir=@USER_HOME@/.config/spotify-kiosk-chromium --ozone-platform=wayland http://127.0.0.1:4928
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
